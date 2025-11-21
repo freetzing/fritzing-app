@@ -1,0 +1,85 @@
+name: Build Fritzing macOS
+
+on:
+  push:
+    branches: [ master, develop ]
+  pull_request:
+    branches: [ master, develop ]
+
+jobs:
+  build:
+    runs-on: macos-13
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v3
+        with:
+          version: '6.5.3'
+          host: 'macOS'
+          target: 'desktop'
+          arch: 'clang_64'
+
+      - name: Install Dependencies
+        run: |
+          brew install cmake ninja
+
+      - name: Setup LibGit2
+        run: |
+          cd ..
+          wget -q https://github.com/libgit2/libgit2/archive/v1.7.1.tar.gz
+          tar xzf v1.7.1.tar.gz
+          cd libgit2-1.7.1
+          mkdir build
+          cd build
+          cmake -G Ninja -D BUILD_SHARED_LIBS=OFF -D CMAKE_BUILD_TYPE=Release -D CMAKE_OSX_ARCHITECTURES=x86_64 ..
+          cmake --build . --config Release
+          cd ..
+          mkdir lib
+          cp build/libgit2.a lib/
+
+      - name: Setup Boost
+        run: |
+          cd ..
+          wget -q https://github.com/boostorg/boost/releases/download/boost-1.85.0/boost_1_85_0.tar.bz2
+          tar xjf boost_1_85_0.tar.bz2
+
+      - name: Build Fritzing
+        run: |
+          qmake phoenix.pro
+          make -j$(sysctl -n hw.ncpu) release
+
+      - name: Prepare Release
+        run: |
+          # Define paths
+          APP_BUNDLE="../release64/Fritzing.app"
+          CONTENTS_DIR="$APP_BUNDLE/Contents"
+          MACOS_DIR="$CONTENTS_DIR/MacOS"
+          
+          # Copy resources to bundle
+          cp -rf sketches help translations INSTALL.txt README.md LICENSE.CC-BY-SA LICENSE.GPL2 LICENSE.GPL3 "$MACOS_DIR/"
+          
+          # Clean translations
+          rm -f "$MACOS_DIR/translations/"*.ts
+          find "$MACOS_DIR/translations" -name "*.qm" -size -128c -delete
+
+          # Clone parts
+          git clone --branch master --single-branch https://github.com/fritzing/fritzing-parts.git fritzing-parts
+          
+          # Run Fritzing to generate parts db
+          # The binary is in ../release64/Fritzing.app/Contents/MacOS/Fritzing
+          "$MACOS_DIR/Fritzing" -db "fritzing-parts/parts.db"
+          
+          # Run macdeployqt
+          macdeployqt "$APP_BUNDLE" -dmg -verbose=1
+          
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Fritzing-macOS
+          path: ../release64/Fritzing.dmg
+
+    
